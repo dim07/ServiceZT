@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<BorlandProject>
+	<Transactions>
+    <Transaction>1899.12.30 00:00:00.000.455,C:\Users\dima\Documents\RAD Studio\Projects\Unit3.dfm=D:\Work_delphi\ZT\ServiceZT\main.dfm</Transaction>
+    <Transaction>1899.12.30 00:00:00.000.438,=C:\Users\dima\Documents\RAD Studio\Projects\Unit3.pas</Transaction>
+    <Transaction>1899.12.30 00:00:00.000.455,C:\Users\dima\Documents\RAD Studio\Projects\Unit3.pas=D:\Work_delphi\ZT\ServiceZT\main.pas</Transaction>
+    <Transaction>1899.12.30 00:00:00.000.378,C:\Users\dima\Documents\RAD Studio\Projects\Project3.dproj=D:\Work_delphi\ZT\ServiceZT\ZTs.dproj</Transaction>
+    <Transaction>1899.12.30 00:00:00.000.741,D:\Work_delphi\ZT\ServiceZT\Unit1.pas=D:\Work_delphi\ZT\ServiceZT\ZT_TM.pas</Transaction>
+    <Transaction>1899.12.30 00:00:00.000.475,=D:\Work_delphi\ZT\ServiceZT\Unit1.pas</Transaction>
+  </Transactions>
+</BorlandProject>

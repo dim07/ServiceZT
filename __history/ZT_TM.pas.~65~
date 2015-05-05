@@ -1,0 +1,430 @@
+unit ZT_TM;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes;
+
+type
+  TSmallIntSet = set of 0 .. SizeOf(SmallInt) * 8 - 1;
+  // type
+  // TIntegerSet = set of 0..SizeOf(Integer)*8 - 1;
+  // var
+  // I : Integer;
+  // N : Integer;
+  // begin
+  // Include(TIntegerSet(I), N);     // установили N-ный бит в 1
+  // Exclude(TIntegerSet(I), N);     // сбросили N-ный бит в 0
+  // if N in TIntegerSet(I) then...  // проверили N-ный бит
+  // end;
+
+  TObmotka = (VN = 1, SN, NN1, NN2);
+  TNParam = (NO =0,II, PP, SI);
+
+  TTransfData = class(TList)
+    tr_id: Integer;
+    S_nom: Single;
+    S_max: Single;
+    tg_fi: Single;
+  end;
+
+  TPodstData = class(TList)
+    S_nom_min: Single;
+  end;
+
+  TNagrItem = class
+    Obmotka: TObmotka;
+    Pik: Single;
+    Imax, Smax, Pmax: Single;
+    StartDt, PikDt, EndDt: TDateTime;
+  end;
+
+  TNagrList = class(TList)
+  private
+    function GetMax: Integer;
+  public
+//    nominal: Double;
+//    Step: SmallInt;
+    TransId: Integer;
+    zagr: Double;   // Процент загрузки трансформатора
+    S_max: Double; // Максимальная полная мощность
+    destructor Destroy; override;
+//    function GetRetroData(StartDate: TDateTime;
+//      StepSec, Period, Ch, RTU, Point: SmallInt): Boolean;
+    procedure InsertToDB(StartDt,EndDt: TDateTime);
+  end;
+
+  TPrognozItem = class
+    Pik: Single; // %
+    PikS, MedS, MinS: Single;  // S
+    StartDt, PikDt, EndDt: TDateTime;
+    TransInfoList: TList;
+  end;
+
+  TTransInfoRorPrognozItem = class
+    tr_id: Integer;
+    Nagr_fact: Single; //%
+    tg_fi: Single;
+  end;
+
+
+  TPrognozList = class(TList)
+    PodstId: Integer;
+    procedure InsertToDB(StartDt,EndDt: TDateTime);
+  end;
+
+  PXSmallIntArray = ^TXSmallIntArray;
+  TXSmallIntArray = array [0 .. MaxInt div SizeOf(SmallInt) - 1] of SmallInt;
+  PXSingleArray = ^TXSingleArray;
+  TXSingleArray = array [0 .. MaxInt div SizeOf(Single) - 1] of Single;
+
+  TObmotkaArray = class
+    Obmotka: TObmotka;
+    N_param: TNParam;
+    values, Sf: PXSingleArray;
+    flags: PXSmallIntArray;
+    function GetRetroData(StartDate: TDateTime;
+      StepSec, Period, Ch, RTU, Point: SmallInt): Boolean;
+    destructor Destroy; override;
+    constructor Create(aObm: TObmotka; aNParam: TNParam);
+  end;
+
+  procedure InsertNagrToDB(TransId: Integer; StartDt, EndDt, PikDt: TDateTime; Pik, Med: Single; Obm: TObmotka);
+
+implementation
+
+uses tmaccess, tma_defs, DB, Math, DateUtils, ADODB, main;
+
+{ TNagrList }
+
+destructor TNagrList.Destroy;
+var
+  i: Integer;
+begin
+  for i := 0 to Count - 1 do
+    TNagrItem(items[i]).Free;
+  inherited;
+end;
+
+function TNagrList.GetMax: Integer;
+var
+  i, im: Integer;
+  p, pm: Single;
+begin
+  im := 0;
+  pm := 0;
+  for i := 0 to Count - 1 do
+  begin
+    p := TNagrItem(items[i]).Pik;
+    if p >= pm then
+    begin
+      pm := p;
+      im := i;
+    end;
+  end;
+  Result := im;
+end;
+
+procedure TNagrList.InsertToDB(StartDt, EndDt: TDateTime);
+var
+Cmnd: TADOCommand;
+obmName: String;
+i: Integer;
+ni: TNagrItem;
+const
+adt = 'YYYY-MM-DD hh:mm:ss';
+DelSQL = 'DELETE FROM transperegruz where transformator_id = :tid AND PikDt >= :dt1 AND PikDt <= :dt2';
+InsSQL = 'INSERT INTO transperegruz (transformator_id, obmotka, StartDt, PikDt, EndDt, pik, Imax, Pmax, Smax) '+
+         'VALUES(:tid, :ob, :sd, :pd, :ed, :p, :im, :pm, :sm)';
+begin
+  Cmnd := TADOCommand.Create(nil);
+  try
+    //чистим если уже были данные за этот период
+    Cmnd.Connection := ZTService.ADOConnection1;
+    Cmnd.CommandText:=DelSQL;
+    Cmnd.Parameters.ParamByName('tid').Value := TransId;
+    Cmnd.Parameters.ParamByName('dt1').Value := FormatDateTime(adt, StartDt);
+    Cmnd.Parameters.ParamByName('dt2').Value := FormatDateTime(adt, EndDt);
+    Cmnd.Execute;
+    // вставляем нагрузки
+    Cmnd.CommandText:=InsSQL;
+    for i := 0 to Count-1 do
+    begin
+      ni := items[i];
+      if ni.Pik > 0 then
+      begin
+        Cmnd.Parameters.ParamByName('tid').Value := TransId;
+        case ni.Obmotka of
+          VN: obmName := 'ВН';
+          SN: obmName := 'СН';
+          NN1: obmName := 'НН1';
+          NN2: obmName := 'НН2';
+        end;
+        Cmnd.Parameters.ParamByName('ob').DataType := ftWideString;
+        Cmnd.Parameters.ParamByName('p').DataType := ftFloat;
+        Cmnd.Parameters.ParamByName('im').DataType := ftFloat;
+        Cmnd.Parameters.ParamByName('pm').DataType := ftFloat;
+        Cmnd.Parameters.ParamByName('sm').DataType := ftFloat;
+
+        Cmnd.Parameters.ParamByName('ob').Value := obmName;
+        Cmnd.Parameters.ParamByName('sd').Value := FormatDateTime(adt, ni.StartDt);
+        Cmnd.Parameters.ParamByName('pd').Value := FormatDateTime(adt, ni.PikDt);
+        Cmnd.Parameters.ParamByName('ed').Value := FormatDateTime(adt, ni.EndDt);
+        Cmnd.Parameters.ParamByName('p').Value := ni.Pik;
+        Cmnd.Parameters.ParamByName('im').Value := ni.Imax;
+        Cmnd.Parameters.ParamByName('pm').Value := ni.Pmax;
+        Cmnd.Parameters.ParamByName('sm').Value := ni.Smax;
+        Cmnd.Execute;
+      end;
+    end;
+  finally
+   Cmnd.Free;
+  end;
+end;
+
+
+procedure InsertNagrToDB(TransId: Integer; StartDt, EndDt, PikDt: TDateTime; Pik, Med: Single; Obm: TObmotka);
+var
+Cmnd: TADOCommand;
+obmName: String;
+const
+adt = 'YYYY-MM-DD hh:mm:ss';
+DelSQL = 'DELETE FROM transnagruz where transformator_id = :tid AND tpik >= :dt1 AND tpik <= :dt2';
+InsSQL = 'INSERT INTO transnagruz (transformator_id, obm, start, tpik, period, pik, med) '+
+         'VALUES(:tid, :ob, :sd, :pd, :per, :p, :med)';
+begin
+  Cmnd := TADOCommand.Create(nil);
+  try
+    //чистим если уже были данные за этот период
+    Cmnd.Connection := ZTService.ADOConnection1;
+    Cmnd.CommandText:=DelSQL;
+    Cmnd.Parameters.ParamByName('tid').Value := TransId;
+    Cmnd.Parameters.ParamByName('dt1').Value := FormatDateTime(adt, StartDt);
+    Cmnd.Parameters.ParamByName('dt2').Value := FormatDateTime(adt, IncHour(StartDt, period));
+    Cmnd.Execute;
+    // вставляем нагрузки
+    Cmnd.CommandText:=InsSQL;
+    Cmnd.Parameters.ParamByName('tid').Value := TransId;
+    case Obm of
+      VN: obmName := 'ВН';
+      SN: obmName := 'СН';
+      NN1: obmName := 'НН1';
+      NN2: obmName := 'НН2';
+    end;
+    Cmnd.Parameters.ParamByName('ob').DataType := ftWideString;
+    Cmnd.Parameters.ParamByName('p').DataType := ftFloat;
+    Cmnd.Parameters.ParamByName('med').DataType := ftFloat;
+
+    Cmnd.Parameters.ParamByName('ob').Value := obmName;
+    Cmnd.Parameters.ParamByName('sd').Value := FormatDateTime(adt, StartDt);
+    Cmnd.Parameters.ParamByName('pd').Value := FormatDateTime(adt, PikDt);
+    Cmnd.Parameters.ParamByName('per').Value := period;
+    Cmnd.Parameters.ParamByName('p').Value := Pik;
+    Cmnd.Parameters.ParamByName('med').Value := Med;
+    Cmnd.Execute;
+  finally
+   Cmnd.Free;
+  end;
+end;
+
+{$POINTERMATH ON}
+
+//function TNagrList.GetRetroData(StartDate: TDateTime;
+//  StepSec, Period, Ch, RTU, Point: SmallInt) : Boolean ;
+//var
+//  DN: TNagrItem;
+//  MaxNagr: Single;
+//  StartDt, MaxDt, EndDt: TDateTime;
+//  SecDlit: Int64;
+//  DN_Is, Max_Is: Boolean;
+//  Quan: SmallInt;
+//begin
+//  Result:=FALSE;
+//
+//
+//    if index > -1 then
+//    begin
+//      Quan := 3600*period div step;
+//      GetMem(values, Quan * SizeOf(Single));
+//      GetMem(flags, Quan * SizeOf(SmallInt));
+//      try
+//      tmTakeRetroTit(Ch, RTU, Point, PAnsiChar(AnsiString(sDT)), Step, Quan, index,
+//        PSingle(values), PSmallInt(flags));
+//
+//      MaxNagr := 0;
+//      MaxDt := StartDate;
+//      // StDt:= StartDate;
+//      // SecMax:=0;
+//      DN_Is := False;
+//      Max_Is := False;
+//      for i := 0 to Quan - 1 do
+//      begin
+//        if (UNRELIABLE_HDW in TSmallIntSet(flags^[i])) or
+//           (values^[i] > 1000000)
+//        then Continue;
+//        if values^[i] >= k_kr * nominal then
+//        begin
+//          if not DN_Is then
+//          begin
+//            DN := TNagrItem.Create;
+//            DN_Is := True;
+//            DN.StartDt := IncSecond(StartDate, i * StepSec);
+//            DN.Pik := values^[i];
+//            DN.PikDt := DN.StartDt;
+//            DN.EndDt := DN.StartDt;
+//            Add(DN);
+//          end else
+//          begin
+//            if values^[i] > DN.Pik then
+//            begin
+//              DN.Pik := values^[i];
+//              DN.PikDt := IncSecond(StartDate, i * StepSec);
+//            end;
+//            DN.EndDt := IncSecond(StartDate, i * StepSec);
+//          end;
+//        end else
+//        if DN_Is then
+//        begin
+//          DN_Is := False;
+//          if SecondsBetween(DN.StartDt, DN.EndDt) < t_kr then
+//          begin
+//            Remove(DN);
+//            DN.Free;
+//          end;
+//        end;
+//
+//        if (i = Quan - 1) and DN_Is then // если цикл кончился с перегрузом
+//        begin
+//          if SecondsBetween(DN.StartDt, DN.EndDt) < t_kr then
+//          begin
+//            Remove(DN);
+//            DN.Free;
+//          end;
+//        end;
+//
+//        if values^[i] > MaxNagr then
+//        begin
+//          MaxNagr := values^[i];
+//        end;
+//        zagr := 100 * MaxNagr / nominal;
+//      end;
+//      finally
+//        FreeMemory(values);
+//        FreeMemory(flags);
+//      end;
+//    end;
+//    Result := (index>-1);
+//end;
+{$POINTERMATH OFF}
+{ TObmotkaArray }
+
+constructor TObmotkaArray.Create(aObm: TObmotka; aNParam: TNParam);
+begin
+  inherited Create;
+  Obmotka := aObm;
+  N_param := aNParam;
+  values := nil;
+  flags := nil;
+  Sf := nil;
+end;
+
+destructor TObmotkaArray.Destroy;
+begin
+  if Assigned(values) then
+    FreeMemory(values);
+  if Assigned(flags) then
+    FreeMemory(flags);
+  if Assigned(Sf) then
+      FreeMemory(Sf);
+  inherited;
+end;
+
+function TObmotkaArray.GetRetroData(StartDate: TDateTime; StepSec, Period, Ch,
+  RTU, Point: SmallInt): Boolean;
+var
+RetroInfoEx: array[0..MAX_RETRONUM] of TRetroInfoEx;
+i, index: Integer;
+Quan: SmallInt;
+sDT: String;
+begin
+  Result := False;
+//  index := -1;
+//  FillMemory(@RetroInfoEx[0], sizeof(RetroInfoEx), 0);
+//  for i := 0 to tma_defs.MAX_RETRONUM do // поиск ретроспективы с таким шагом
+//  begin
+//    if tmRetroInfoEx(i, RetroInfoEx[i]) = tma_defs.FAILURE then
+//      break else
+//    begin
+//      if $314e = RetroInfoEx[i].rType then
+//      begin
+//        if (StepSec = RetroInfoEx[i].rPeriod) then
+//        begin
+//          index := i;
+//        end;
+//      end;
+//    end;
+//  end;
+//  if index >= 0 then
+//  begin
+//    sDT := FormatDateTime('DD.MM.YYYY HH:NN:SS', StartDate);
+//    Quan := 3600*Period div StepSec;
+//    GetMem(values, Quan * SizeOf(Single));
+//    GetMem(flags, Quan * SizeOf(SmallInt));
+//    tmTakeRetroTit(Ch, RTU, Point, PAnsiChar(AnsiString(sDT)), Step, Quan, index,
+//        PSingle(values), PSmallInt(flags));
+//    Result := True;
+//  end;
+  sDT := FormatDateTime('DD.MM.YYYY HH:NN:SS', StartDate);
+    Quan := 3600*Period div StepSec;
+    GetMem(values, Quan * SizeOf(Single));
+    GetMem(flags, Quan * SizeOf(SmallInt));
+    tmTakeRetroTit(Ch, RTU, Point, PAnsiChar(AnsiString(sDT)), Step, Quan, 0,
+        PSingle(values), PSmallInt(flags));
+  Result := True;
+end;
+
+{ TPrognozList }
+
+procedure TPrognozList.InsertToDB(StartDt, EndDt: TDateTime);
+var
+Cmnd: TADOCommand;
+obmName: String;
+i: Integer;
+ni: TPrognozItem;
+const
+adt = 'YYYY-MM-DD hh:mm:ss';
+DelSQL = 'DELETE FROM podstprognoz where podst_id = :pid AND PikDt >= :dt1 AND PikDt <= :dt2';
+InsSQL = 'INSERT INTO podstprognoz (podst_id, StartDt, PikDt, EndDt, pik, Smax) '+
+         'VALUES(:pid, :sd, :pd, :ed, :p, :sm)';
+begin
+  Cmnd := TADOCommand.Create(nil);
+  try
+    //чистим если уже были данные за этот период
+    Cmnd.Connection := ZTService.ADOConnection1;
+    Cmnd.CommandText:=DelSQL;
+    Cmnd.Parameters.ParamByName('pid').Value := PodstId;
+    Cmnd.Parameters.ParamByName('dt1').Value := FormatDateTime(adt, StartDt);
+    Cmnd.Parameters.ParamByName('dt2').Value := FormatDateTime(adt, EndDt);
+    Cmnd.Execute;
+    // вставляем нагрузки
+    Cmnd.CommandText:=InsSQL;
+    for i := 0 to Count-1 do
+    begin
+      ni := items[i];
+      Cmnd.Parameters.ParamByName('p').DataType := ftFloat;
+      Cmnd.Parameters.ParamByName('sm').DataType := ftFloat;
+
+      Cmnd.Parameters.ParamByName('pid').Value := PodstId;
+      Cmnd.Parameters.ParamByName('sd').Value := FormatDateTime(adt, ni.StartDt);
+      Cmnd.Parameters.ParamByName('pd').Value := FormatDateTime(adt, ni.PikDt);
+      Cmnd.Parameters.ParamByName('ed').Value := FormatDateTime(adt, ni.EndDt);
+      Cmnd.Parameters.ParamByName('p').Value := ni.Pik;
+      Cmnd.Parameters.ParamByName('sm').Value := ni.PikS;
+      Cmnd.Execute;
+    end;
+  finally
+   Cmnd.Free;
+  end;
+end;
+
+end.

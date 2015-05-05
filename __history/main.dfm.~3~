@@ -1,0 +1,10 @@
+object ZTService: TZTService
+  OldCreateOrder = False
+  DisplayName = 'ZTService'
+  Password = 'OR54321@'
+  ServiceStartName = '_oik-reader'
+  OnExecute = ServiceExecute
+  OnStart = ServiceStart
+  Height = 150
+  Width = 215
+end
